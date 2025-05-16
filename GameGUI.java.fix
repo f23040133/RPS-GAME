@@ -1,0 +1,941 @@
+import java.awt.*;
+import java.awt.event.*;
+import java.net.URL;
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.text.JTextComponent;
+
+public class GameGUI extends JFrame {
+    private static final long serialVersionUID = 1L;
+    
+    private transient final Player player;
+    private transient final Player player2; // Second player for PvP mode
+    private transient final Computer computer;
+    private transient ScoreBoard scoreBoard;
+    private transient GameMode currentMode;
+    private transient GameType gameType; // PvP or PvC
+    private transient final SoundManager soundManager;
+    private transient final GameTimer gameTimer;
+    private transient final GameHistory gameHistory;
+    private int roundsToWin = 3; // Best of 5 (first to 3 wins)
+    private int currentRound = 0; // Start from 0
+    private boolean inCountdown = false;
+    private int countdownValue = 3;
+    
+    private JLabel playerScoreLabel;
+    private JLabel computerScoreLabel;
+    private JLabel drawsLabel;
+    private JLabel resultLabel;
+    private JLabel playerMoveLabel;
+    private JLabel computerMoveLabel;
+    private JLabel timeLabel;
+    private JLabel roundLabel; // Added to show current round
+    private JPanel moveButtonsPanel;
+    private JPanel mainPanel;
+    private Color backgroundColor = new Color(34, 40, 49);
+    private Color accentColor = new Color(0, 173, 181);
+    private Color textColor = new Color(238, 238, 238);
+    
+    // Image icons for moves
+    private ImageIcon rockIcon;
+    private ImageIcon paperIcon;
+    private ImageIcon scissorsIcon;
+    private ImageIcon lizardIcon;
+    private ImageIcon spockIcon;
+    private transient final FixedGameImageManager imageManager;
+    
+    public GameGUI() {
+        // First, define instance variables
+        this.player = new Player("Player 1", 1);
+        this.player2 = new Player("Player 2", 2);
+        this.computer = new Computer();
+        this.scoreBoard = new ScoreBoard();
+        this.currentMode = GameMode.CLASSIC;
+        this.gameType = GameType.PVC; // Default to Player vs Computer
+        this.soundManager = new SoundManager();
+        this.gameTimer = new GameTimer();
+        this.gameHistory = new GameHistory();
+        this.imageManager = FixedGameImageManager.getInstance();
+        
+        // Load images before GUI setup
+        loadImages();
+        
+        // Use SwingUtilities to avoid "this-escape" issue
+        SwingUtilities.invokeLater(() -> {
+            // Initialize JFrame properties
+            setTitle("Rock Paper Scissors Ultimate");
+            setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            
+            // Now set up the rest of the GUI
+            setupGUIContent();
+            
+            // Initialize timer after GUI setup
+            startClock();
+            
+            // Play start sound
+            soundManager.playSound("game_start");
+            
+            // Add key listener for player moves
+            addKeyListener(new KeyAdapter() {
+                @Override
+                public void keyPressed(KeyEvent e) {
+                    handleKeyPress(e.getKeyCode());
+                }
+            });
+            
+            // Ensure the frame can receive key events
+            setFocusable(true);
+            requestFocus();
+        });
+    }
+    
+    private void loadImages() {
+        // Use the image manager to load images
+        rockIcon = imageManager.getRockIcon();
+        paperIcon = imageManager.getPaperIcon();
+        scissorsIcon = imageManager.getScissorsIcon();
+        lizardIcon = imageManager.getLizardIcon();
+        spockIcon = imageManager.getSpockIcon();
+    }
+    
+    private ImageIcon createScaledImageIcon(String path, int width, int height) {
+        try {
+            URL imageUrl = getClass().getResource(path);
+            if (imageUrl != null) {
+                ImageIcon icon = new ImageIcon(imageUrl);
+                Image img = icon.getImage().getScaledInstance(width, height, Image.SCALE_SMOOTH);
+                return new ImageIcon(img);
+            }
+        } catch (Exception e) {
+            // If image loading fails, create a text-based fallback icon
+            JLabel fallbackLabel = new JLabel(path.substring(path.lastIndexOf('/') + 1, path.lastIndexOf('.')));
+            fallbackLabel.setPreferredSize(new Dimension(width, height));
+            fallbackLabel.setHorizontalAlignment(SwingConstants.CENTER);
+            return new ImageIcon();
+        }
+        return new ImageIcon();
+    }
+    
+    private void setupGUIContent() {
+        setLayout(new BorderLayout());
+        setResizable(false);
+        
+        // Set window size and center it
+        setSize(800, 600);
+        setLocationRelativeTo(null);
+        
+        // Add window listener for cleanup
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                soundManager.cleanup();
+            }
+        });
+        
+        // Create gradient background panel
+        mainPanel = new JPanel(new BorderLayout(10, 10)) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                Graphics2D g2d = (Graphics2D) g;
+                g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+                GradientPaint gradient = new GradientPaint(0, 0, backgroundColor, getWidth(), getHeight(), accentColor.darker());
+                g2d.setPaint(gradient);
+                g2d.fillRect(0, 0, getWidth(), getHeight());
+            }
+        };
+        mainPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
+        
+        // Add components
+        setupHeaderPanel();
+        setupScorePanel();
+        setupGamePanel();
+        setupControlPanel();
+        
+        // Menu Bar
+        setJMenuBar(createStyledMenuBar());
+        
+        add(mainPanel);
+    }
+    
+    private void setupHeaderPanel() {
+        JPanel headerPanel = new JPanel(new BorderLayout());
+        headerPanel.setOpaque(false);
+        
+        // Create and style time label
+        timeLabel = new JLabel();
+        timeLabel.setForeground(textColor);
+        timeLabel.setFont(new Font("Arial", Font.BOLD, 16));
+        timeLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        headerPanel.add(timeLabel, BorderLayout.EAST);
+        
+        // Create round label
+        roundLabel = new JLabel("Round: 0");
+        roundLabel.setForeground(textColor);
+        roundLabel.setFont(new Font("Arial", Font.BOLD, 16));
+        headerPanel.add(roundLabel, BorderLayout.WEST);
+        
+        mainPanel.add(headerPanel, BorderLayout.NORTH);
+    }
+    
+    private void setupScorePanel() {
+        JPanel scorePanel = new JPanel(new GridLayout(1, 3, 20, 0));
+        scorePanel.setOpaque(false);
+        
+        // Create score labels with custom styling
+        playerScoreLabel = createStyledLabel("Player: 0");
+        computerScoreLabel = createStyledLabel("Computer: 0");
+        drawsLabel = createStyledLabel("Draws: 0");
+        
+        scorePanel.add(playerScoreLabel);
+        scorePanel.add(computerScoreLabel);
+        scorePanel.add(drawsLabel);
+        
+        mainPanel.add(scorePanel, BorderLayout.CENTER);
+    }
+    
+    private void setupGamePanel() {
+        JPanel gamePanel = new JPanel(new GridLayout(3, 1, 5, 5));
+        gamePanel.setOpaque(false);
+        
+        playerMoveLabel = createStyledLabel("Your Move: -");
+        
+        // Set appropriate label based on game type
+        if (gameType == GameType.PVP) {
+            computerMoveLabel = createStyledLabel("Player 2's Move: -");
+        } else {
+            computerMoveLabel = createStyledLabel("Computer's Move: -");
+        }
+        
+        resultLabel = createStyledLabel("Make your move!");
+        
+        resultLabel.setFont(new Font("Arial", Font.BOLD, 24));
+        
+        gamePanel.add(playerMoveLabel);
+        gamePanel.add(computerMoveLabel);
+        gamePanel.add(resultLabel);
+        
+        mainPanel.add(gamePanel, BorderLayout.SOUTH);
+    }
+    
+    private JLabel createStyledLabel(String text) {
+        JLabel label = new JLabel(text, SwingConstants.CENTER);
+        label.setForeground(textColor);
+        label.setFont(new Font("Arial", Font.BOLD, 18));
+        return label;
+    }
+    
+    private JButton createStyledButton(String text, ImageIcon icon) {
+        JButton button = new JButton(text, icon);
+        button.setFont(new Font("Arial", Font.BOLD, 14));
+        button.setForeground(backgroundColor);
+        button.setBackground(accentColor);
+        button.setBorderPainted(false);
+        button.setFocusPainted(false);
+        button.setContentAreaFilled(true);
+        button.setPreferredSize(new Dimension(120, 100));
+        
+        // Add hover effect
+        button.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                button.setBackground(accentColor.brighter());
+            }
+            
+            @Override
+            public void mouseExited(MouseEvent e) {
+                button.setBackground(accentColor);
+            }
+        });
+        
+        return button;
+    }
+    
+    private void setupControlPanel() {
+        moveButtonsPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 20, 20));
+        moveButtonsPanel.setOpaque(false);
+        updateMoveButtons();
+        mainPanel.add(moveButtonsPanel, BorderLayout.SOUTH);
+    }
+    
+    private void updateMoveButtons() {
+        moveButtonsPanel.removeAll();
+        
+        if (currentMode == GameMode.CLASSIC) {
+            moveButtonsPanel.add(createStyledButton("Rock", rockIcon));
+            moveButtonsPanel.add(createStyledButton("Paper", paperIcon));
+            moveButtonsPanel.add(createStyledButton("Scissors", scissorsIcon));
+        } else {
+            moveButtonsPanel.add(createStyledButton("Rock", rockIcon));
+            moveButtonsPanel.add(createStyledButton("Paper", paperIcon));
+            moveButtonsPanel.add(createStyledButton("Scissors", scissorsIcon));
+            moveButtonsPanel.add(createStyledButton("Lizard", lizardIcon));
+            moveButtonsPanel.add(createStyledButton("Spock", spockIcon));
+        }
+        // Add action listeners to buttons
+        for (Component comp : moveButtonsPanel.getComponents()) {
+            if (comp instanceof JButton button) {
+                button.addActionListener(e -> {
+                    soundManager.playSound("button_click");
+                    playMoveWithAnimation(Move.valueOf(button.getText().toUpperCase()));
+                });
+            }
+        }
+        
+        moveButtonsPanel.revalidate();
+        moveButtonsPanel.repaint();
+    }
+    
+    private JMenuBar createStyledMenuBar() {
+        JMenuBar menuBar = new JMenuBar();
+        menuBar.setBackground(backgroundColor);
+        
+        JMenu gameMenu = createStyledMenu("Game");
+        JMenu modeMenu = createStyledMenu("Mode");
+        JMenu gameTypeMenu = createStyledMenu("Game Type");
+        JMenu roundsMenu = createStyledMenu("Rounds");
+        JMenu themeMenu = createStyledMenu("Theme");
+        JMenu soundMenu = createStyledMenu("Sound");
+        JMenu historyMenu = createStyledMenu("History");
+        
+        // Game menu items
+        gameMenu.add(createStyledMenuItem("New Game", e -> resetGame()));
+        gameMenu.add(createStyledMenuItem("Start Round", e -> startCountdown()));
+        gameMenu.add(createStyledMenuItem("Exit", e -> System.exit(0)));
+        
+        // Mode menu items
+        modeMenu.add(createStyledMenuItem("Classic Mode", e -> changeGameMode(GameMode.CLASSIC)));
+        modeMenu.add(createStyledMenuItem("Extended Mode", e -> changeGameMode(GameMode.EXTENDED)));
+        
+        // Game Type menu items
+        gameTypeMenu.add(createStyledMenuItem("Player vs Computer", e -> changeGameType(GameType.PVC)));
+        gameTypeMenu.add(createStyledMenuItem("Player vs Player", e -> changeGameType(GameType.PVP)));
+        
+        // Rounds menu items
+        roundsMenu.add(createStyledMenuItem("Best of 3 (First to 2)", e -> configureRounds(2)));
+        roundsMenu.add(createStyledMenuItem("Best of 5 (First to 3)", e -> configureRounds(3)));
+        roundsMenu.add(createStyledMenuItem("Best of 7 (First to 4)", e -> configureRounds(4)));
+        
+        // Theme menu items
+        themeMenu.add(createStyledMenuItem("Dark Theme", e -> changeTheme("dark")));
+        themeMenu.add(createStyledMenuItem("Light Theme", e -> changeTheme("light")));
+        
+        // Sound menu items
+        soundMenu.add(createStyledMenuItem("Toggle Sound", e -> toggleSound()));
+        
+        // History menu items
+        historyMenu.add(createStyledMenuItem("View Game History", e -> showGameHistory()));
+        historyMenu.add(createStyledMenuItem("Clear History", e -> clearGameHistory()));
+        
+        menuBar.add(gameMenu);
+        menuBar.add(modeMenu);
+        menuBar.add(gameTypeMenu);
+        menuBar.add(roundsMenu);
+        menuBar.add(themeMenu);
+        menuBar.add(soundMenu);
+        menuBar.add(historyMenu);
+        
+        return menuBar;
+    }
+    
+    private JMenu createStyledMenu(String text) {
+        JMenu menu = new JMenu(text);
+        menu.setForeground(textColor);
+        menu.setFont(new Font("Arial", Font.BOLD, 14));
+        return menu;
+    }
+    
+    private JMenuItem createStyledMenuItem(String text, ActionListener action) {
+        JMenuItem item = new JMenuItem(text);
+        item.setBackground(backgroundColor);
+        item.setForeground(textColor);
+        item.setFont(new Font("Arial", Font.PLAIN, 14));
+        item.addActionListener(action);
+        return item;
+    }
+    
+    // Modified to handle sequential player moves in PvP mode
+    private void playMoveWithAnimation(Move playerMove) {
+        // In PvP mode, we want Player 2 to select their move after Player 1
+        if (gameType == GameType.PVP) {
+            // Store Player 1's move and update label
+            player.setSelectedMove(playerMove);
+            playerMoveLabel.setText(player.getName() + "'s Move: " + playerMove);
+            
+            // Create a dialog for Player 2 to select a move
+            JDialog player2Dialog = new JDialog(this, player2.getName() + "'s Turn", true);
+            player2Dialog.setLayout(new BorderLayout());
+            player2Dialog.setSize(500, 300);
+            player2Dialog.setLocationRelativeTo(this);
+            
+            // Add instruction label
+            JLabel instructionLabel = new JLabel(player2.getName() + ", select your move:", JLabel.CENTER);
+            instructionLabel.setFont(new Font("Arial", Font.BOLD, 18));
+            player2Dialog.add(instructionLabel, BorderLayout.NORTH);
+            
+            // Create buttons panel for Player 2's selection
+            JPanel buttonsPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 20, 20));
+            
+            // Add move buttons based on current game mode
+            if (currentMode == GameMode.CLASSIC) {
+                addPlayer2MoveButton(buttonsPanel, "Rock", rockIcon, player2Dialog);
+                addPlayer2MoveButton(buttonsPanel, "Paper", paperIcon, player2Dialog);
+                addPlayer2MoveButton(buttonsPanel, "Scissors", scissorsIcon, player2Dialog);
+            } else {
+                addPlayer2MoveButton(buttonsPanel, "Rock", rockIcon, player2Dialog);
+                addPlayer2MoveButton(buttonsPanel, "Paper", paperIcon, player2Dialog);
+                addPlayer2MoveButton(buttonsPanel, "Scissors", scissorsIcon, player2Dialog);
+                addPlayer2MoveButton(buttonsPanel, "Lizard", lizardIcon, player2Dialog);
+                addPlayer2MoveButton(buttonsPanel, "Spock", spockIcon, player2Dialog);
+            }
+            
+            player2Dialog.add(buttonsPanel, BorderLayout.CENTER);
+            
+            // Show the dialog - this blocks until Player 2 makes a selection
+            player2Dialog.setVisible(true);
+            
+            // After Player 2 selects a move (dialog closes), process the round
+            Move player2Move = player2.getSelectedMove();
+            if (player2Move != null) {
+                // Calculate result
+                GameResult result = currentMode.determineWinner(playerMove, player2Move);
+                
+                // Update labels to show both moves
+                computerMoveLabel.setText(player2.getName() + "'s Move: " + player2Move);
+                
+                // Update scores, history, and round counter
+                scoreBoard.updateScore(result);
+                gameHistory.addRecord(playerMove, player2Move, result, currentMode);
+                currentRound++;
+                updateRoundLabel();
+                
+                // Display the result
+                displayResult(playerMove, player2Move, result);
+                
+                // Check if match is over
+                if (scoreBoard.getPlayerWins() >= roundsToWin || scoreBoard.getComputerWins() >= roundsToWin) {
+                    endMatch();
+                }
+            } else {
+                // Player 2 didn't make a move (dialog was closed)
+                resultLabel.setText("Round cancelled - " + player2.getName() + " didn't select a move");
+            }
+            
+            return;  // Exit early, we've handled the PvP case
+        }
+        
+        // Original code for PvC mode follows
+        // Disable buttons during animation
+        setButtonsEnabled(false);
+        
+        // Create animation timer
+        Timer timer = new Timer(100, null);
+        final int[] count = {0};
+        final Move[] randomMoves = Move.values();
+        
+        timer.addActionListener(e -> {
+            if (count[0] < 10) {
+                // Show random moves during animation
+                Move randomMove = randomMoves[count[0] % randomMoves.length];
+                computerMoveLabel.setText("Computer's Move: " + randomMove);
+                count[0]++;
+            } else {
+                timer.stop();
+                
+                // Generate computer's move
+                Move computerMove = computer.generateMove();
+                computer.recordPlayerMove(playerMove);
+                
+                // Calculate result
+                GameResult result = currentMode.determineWinner(playerMove, computerMove);
+                
+                // Update score, history, and round counter
+                scoreBoard.updateScore(result);
+                gameHistory.addRecord(playerMove, computerMove, result, currentMode);
+                currentRound++;
+                updateRoundLabel();
+                
+                // Display result
+                displayResult(playerMove, computerMove, result);
+                
+                // Check if match is over
+                if (scoreBoard.getPlayerWins() >= roundsToWin || scoreBoard.getComputerWins() >= roundsToWin) {
+                    endMatch();
+                }
+                
+                // Re-enable buttons
+                setButtonsEnabled(true);
+            }
+        });
+        
+        playerMoveLabel.setText("Your Move: " + playerMove);
+        timer.start();
+    }
+    
+    // Helper method to add move buttons for Player 2
+    private void addPlayer2MoveButton(JPanel panel, String moveName, ImageIcon icon, JDialog dialog) {
+        JButton button = createStyledButton(moveName, icon);
+        button.addActionListener(e -> {
+            soundManager.playSound("button_click");
+            player2.setSelectedMove(Move.valueOf(moveName.toUpperCase()));
+            dialog.dispose();  // Close the dialog when a move is selected
+        });
+        panel.add(button);
+    }
+    
+    // Display the result of a round
+    private void displayResult(Move playerMove, Move computerMove, GameResult result) {
+        // Update move labels
+        if (gameType == GameType.PVP) {
+            playerMoveLabel.setText(player.getName() + "'s Move: " + playerMove);
+            computerMoveLabel.setText(player2.getName() + "'s Move: " + computerMove);
+        } else {
+            playerMoveLabel.setText("Your Move: " + playerMove);
+            computerMoveLabel.setText("Computer's Move: " + computerMove);
+        }
+        
+        // Set result text
+        if (gameType == GameType.PVP) {
+            switch (result) {
+                case WIN -> resultLabel.setText(player.getName() + " wins!");
+                case LOSE -> resultLabel.setText(player2.getName() + " wins!");
+                case DRAW -> resultLabel.setText("It's a draw!");
+                default -> resultLabel.setText("Invalid game state!");
+            }
+        } else {
+            resultLabel.setText(result.getMessage());
+        }
+        
+        // Play appropriate sound
+        switch (result) {
+            case WIN -> soundManager.playSound("win");
+            case LOSE -> soundManager.playSound("lose");
+            case DRAW -> soundManager.playSound("draw");
+        }
+        
+        // Animate score change
+        animateScoreChange();
+    }
+    
+    private void animateScoreChange() {
+        Timer timer = new Timer(50, null);
+        final int[] alpha = {0};
+        
+        timer.addActionListener(e -> {
+            if (alpha[0] < 255) {
+                alpha[0] += 51;
+                updateScoreLabelsWithEffect(alpha[0]);
+            } else {
+                timer.stop();
+                updateScoreLabels();
+            }
+        });
+        
+        timer.start();
+    }
+    
+    private void updateScoreLabelsWithEffect(int alpha) {
+        Color effectColor = new Color(textColor.getRed(), textColor.getGreen(), textColor.getBlue(), alpha);
+        playerScoreLabel.setForeground(effectColor);
+        computerScoreLabel.setForeground(effectColor);
+        drawsLabel.setForeground(effectColor);
+        
+        updateScoreLabels();
+    }
+    
+    private void startClock() {
+        gameTimer.start();
+        Timer timer = new Timer(1000, e -> {
+            timeLabel.setText(gameTimer.getFormattedTime());
+        });
+        timer.start();
+    }
+    
+    private void setButtonsEnabled(boolean enabled) {
+        for (Component comp : moveButtonsPanel.getComponents()) {
+            if (comp instanceof JButton button) {
+                button.setEnabled(enabled);
+            }
+        }
+    }
+    
+    private void changeTheme(String theme) {
+        if (theme.equals("dark")) {
+            backgroundColor = new Color(34, 40, 49);
+            accentColor = new Color(0, 173, 181);
+            textColor = new Color(238, 238, 238);
+        } else {
+            backgroundColor = new Color(240, 240, 240);
+            accentColor = new Color(0, 120, 212);
+            textColor = new Color(33, 33, 33);
+        }
+        
+        updateTheme();
+    }
+    
+    private void updateTheme() {
+        // Update all components with new theme colors
+        mainPanel.repaint();
+        updateMoveButtons();
+        updateScoreLabels();
+        
+        // Update all labels
+        Component[] components = mainPanel.getComponents();
+        for (Component comp : components) {
+            if (comp instanceof JLabel label) {
+                label.setForeground(textColor);
+            }
+        }
+        
+        // Update menu bar
+        setJMenuBar(createStyledMenuBar());
+        
+        revalidate();
+        repaint();
+    }
+    
+    private void updateScoreLabels() {
+        if (gameType == GameType.PVP) {
+            playerScoreLabel.setText(player.getName() + ": " + scoreBoard.getPlayerWins());
+            computerScoreLabel.setText(player2.getName() + ": " + scoreBoard.getComputerWins());
+        } else {
+            playerScoreLabel.setText("You: " + scoreBoard.getPlayerWins());
+            computerScoreLabel.setText("Computer: " + scoreBoard.getComputerWins());
+        }
+        drawsLabel.setText("Draws: " + scoreBoard.getDraws());
+    }
+    
+    private void updateRoundLabel() {
+        if (roundLabel != null) {
+            roundLabel.setText("Round: " + currentRound + " of Best-of-" + (roundsToWin * 2 - 1));
+        }
+    }
+    
+    public void setRoundsToWin(int rounds) {
+        this.roundsToWin = rounds;
+        resetGame();
+        // Update UI to reflect new rounds setting
+        updateRoundLabel();
+        JOptionPane.showMessageDialog(this, "Game set to Best of " + (rounds * 2 - 1) + " (first to " + rounds + " wins)");
+    }
+    
+    private void resetGame() {
+        scoreBoard = new ScoreBoard();
+        currentRound = 0;  // Reset the round counter to 0
+        updateScoreLabels();
+        updateRoundLabel();
+        
+        // Reset player states
+        player.reset();
+        player2.reset();
+        
+        // Set appropriate move labels based on game type
+        if (gameType == GameType.PVP) {
+            playerMoveLabel.setText(player.getName() + "'s Move: -");
+            computerMoveLabel.setText(player2.getName() + "'s Move: -");
+        } else {
+            playerMoveLabel.setText("Your Move: -");
+            computerMoveLabel.setText("Computer's Move: -");
+        }
+        
+        resultLabel.setText("Make your move!");
+        
+        // Also reset the computer's AI
+        computer.reset();
+    }
+    
+    private void changeGameMode(GameMode mode) {
+        currentMode = mode;
+        updateMoveButtons();
+        resetGame();
+    }
+    
+    private void changeGameType(GameType type) {
+        this.gameType = type;
+        
+        if (type == GameType.PVP) {
+            String p1Name = JOptionPane.showInputDialog(this, "Enter name for Player 1:", player.getName());
+            if (p1Name != null && !p1Name.trim().isEmpty()) {
+                player.setName(p1Name);
+            }
+
+            String p2Name = JOptionPane.showInputDialog(this, "Enter name for Player 2:", player2.getName());
+            if (p2Name != null && !p2Name.trim().isEmpty()) {
+                player2.setName(p2Name);
+            }
+        }
+
+        resetGame(); // This will update labels with new names if they were changed.
+        
+        String gameTypeMessage = String.format(
+            """
+            Game type changed to %s
+            
+            %s
+            """,
+            type.getDescription(),
+            type == GameType.PVP ? 
+                String.format("""
+                                Player 1 (%s) keys: A (Rock), S (Paper), D (Scissors), W (Lizard), E (Spock)
+                                Player 2 (%s) keys: J (Rock), K (Paper), L (Scissors), I (Lizard), O (Spock)
+                                """, player.getName(), player2.getName()) :
+                String.format("Player (%s) keys: A (Rock), S (Paper), D (Scissors), W (Lizard), E (Spock)", player.getName())
+        );
+
+        JOptionPane.showMessageDialog(this, 
+                gameTypeMessage,
+                "Game Type Changed",
+                JOptionPane.INFORMATION_MESSAGE);
+    }
+    
+    private void configureRounds(int rounds) {
+        this.roundsToWin = rounds;
+        resetGame();
+        updateRoundLabel();
+        String message = String.format("Match format changed to Best of %d (First to %d)\nNew game started!", 
+                                     (rounds * 2 - 1), rounds);
+        JOptionPane.showMessageDialog(this, message, "Match Format Changed", JOptionPane.INFORMATION_MESSAGE);
+    }
+    
+    private void toggleSound() {
+        soundManager.toggleSound();
+    }
+    
+    private void showGameHistory() {
+        if (gameHistory.size() == 0) {
+            JOptionPane.showMessageDialog(this,
+                    "No game history available yet. Play some games first!",
+                    "Game History",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        
+        JTextPane historyPane = new JTextPane();
+        historyPane.setContentType("text/html");
+        historyPane.setEditable(false);
+        
+        // Light theme for game history
+        historyPane.setBackground(Color.WHITE); // Light background
+        historyPane.setForeground(Color.BLACK); // Dark text for clear visibility
+        
+        // Ensure the font makes words clearly visible - Verdana, size 16
+        Font historyFont = new Font("Verdana", Font.BOLD, 16); // Bold Verdana font, size 16
+        historyPane.setFont(historyFont);
+        historyPane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE); // Ensure JTextPane font is used
+        historyPane.putClientProperty(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON); // Anti-aliasing
+
+        historyPane.setText(gameHistory.getFormattedHistory());
+
+        JScrollPane scrollPane = new JScrollPane(historyPane);
+        scrollPane.setPreferredSize(new Dimension(600, 400));
+        scrollPane.getViewport().setBackground(Color.WHITE); // Match viewport background
+        
+        JOptionPane.showMessageDialog(this,
+                scrollPane,
+                "Game History",
+                JOptionPane.PLAIN_MESSAGE);
+    }
+    
+    private void clearGameHistory() {
+        int response = JOptionPane.showConfirmDialog(this,
+                "Are you sure you want to clear the game history?",
+                "Confirm Clear History",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE);
+        
+        if (response == JOptionPane.YES_OPTION) {
+            gameHistory.clearHistory();
+            JOptionPane.showMessageDialog(this,
+                    "Game history has been cleared.",
+                    "History Cleared",
+                    JOptionPane.INFORMATION_MESSAGE);
+        }
+    }
+    
+    private void handleKeyPress(int keyCode) {
+        if (inCountdown) {
+            // Process key presses during countdown
+            if (gameType == GameType.PVP) {
+                // Both players can make moves
+                player.processKeyPress(keyCode);
+                player2.processKeyPress(keyCode);
+            } else {
+                // Only player 1 can make moves in PvC mode
+                player.processKeyPress(keyCode);
+            }
+        }
+    }
+    
+    private void startCountdown() {
+        // Disable all buttons during countdown
+        setButtonsEnabled(false);
+        inCountdown = true;
+        countdownValue = 3;
+        
+        // Reset player moves
+        player.reset();
+        if (gameType == GameType.PVP) {
+            player2.reset();
+        }
+        
+        // Display countdown message
+        resultLabel.setText("Get ready! " + countdownValue);
+        
+        // Start countdown timer
+        Timer countdownTimer = new Timer(1000, null);
+        countdownTimer.addActionListener(e -> {
+            countdownValue--;
+            
+            if (countdownValue > 0) {
+                resultLabel.setText("Get ready! " + countdownValue);
+                soundManager.playSound("button_click"); // Click sound for countdown
+            } else {
+                countdownTimer.stop();
+                inCountdown = false;
+                
+                // Process the round result
+                processRoundResult();
+                
+                // Re-enable buttons
+                setButtonsEnabled(true);
+            }
+        });
+        
+        countdownTimer.start();
+    }
+    
+    private void processRoundResult() {
+        Move playerMove = player.getSelectedMove();
+        Move opponentMove;
+        GameResult result;
+        
+        if (gameType == GameType.PVP) {
+            // Player vs Player mode
+            opponentMove = player2.getSelectedMove();
+            
+            // Check for cheating
+            if (player.hasCheated() && !player2.hasCheated()) {
+                result = GameResult.LOSE; // Player 1 cheated, Player 2 wins
+                resultLabel.setText(player.getName() + " cheated! " + player2.getName() + " wins this round!");
+                
+                // Update score and history for cheating case
+                scoreBoard.updateScore(result);
+                gameHistory.addRecord(
+                    playerMove != null ? playerMove : Move.ROCK, 
+                    opponentMove != null ? opponentMove : Move.ROCK, 
+                    result, 
+                    currentMode
+                );
+                currentRound++;
+                updateRoundLabel();
+                updateScoreLabels();
+                
+            } else if (!player.hasCheated() && player2.hasCheated()) {
+                result = GameResult.WIN; // Player 2 cheated, Player1 wins
+                resultLabel.setText(player2.getName() + " cheated! " + player.getName() + " wins this round!");
+                
+                // Update score and history for cheating case
+                scoreBoard.updateScore(result);
+                gameHistory.addRecord(
+                    playerMove != null ? playerMove : Move.ROCK, 
+                    opponentMove != null ? opponentMove : Move.ROCK, 
+                    result, 
+                    currentMode
+                );
+                currentRound++;
+                updateRoundLabel();
+                updateScoreLabels();
+                
+            } else if (player.hasCheated() && player2.hasCheated()) {
+                result = GameResult.DRAW; // Both cheated, it's a draw
+                resultLabel.setText("Both players cheated! This round is a draw.");
+                
+                // Update score and history for cheating case
+                scoreBoard.updateScore(result);
+                gameHistory.addRecord(
+                    playerMove != null ? playerMove : Move.ROCK, 
+                    opponentMove != null ? opponentMove : Move.ROCK, 
+                    result, 
+                    currentMode
+                );
+                currentRound++;
+                updateRoundLabel();
+                updateScoreLabels();
+                
+            } else {
+                // No cheating, determine winner normally
+                if (playerMove == null) {
+                    playerMove = Move.ROCK; // Default if no move was made
+                }
+                if (opponentMove == null) {
+                    opponentMove = Move.ROCK; // Default if no move was made
+                }
+                
+                result = currentMode.determineWinner(playerMove, opponentMove);
+
+                // Update score and history
+                scoreBoard.updateScore(result);
+                gameHistory.addRecord(playerMove, opponentMove, result, currentMode);
+                currentRound++;
+                updateRoundLabel();
+                
+                // Display result
+                displayResult(playerMove, opponentMove, result);
+            }
+            
+        } else {
+            // Player vs Computer mode
+            if (playerMove == null) {
+                playerMove = Move.ROCK; // Default if no move was made
+            }
+            
+            opponentMove = computer.generateMove();
+            computer.recordPlayerMove(playerMove); // Record for AI learning
+            
+            result = currentMode.determineWinner(playerMove, opponentMove);
+
+            // Update score and history
+            scoreBoard.updateScore(result);
+            gameHistory.addRecord(playerMove, opponentMove, result, currentMode);
+            currentRound++;
+            updateRoundLabel();
+
+            // Display result
+            displayResult(playerMove, opponentMove, result);
+        }
+        
+        // Check if the match is over
+        if (scoreBoard.getPlayerWins() >= roundsToWin || scoreBoard.getComputerWins() >= roundsToWin) {
+            endMatch();
+        }
+    }
+    
+    private void endMatch() {
+        String winner;
+        String player1Name = gameType == GameType.PVP ? player.getName() : "You";
+        String player2Name = gameType == GameType.PVP ? player2.getName() : "Computer";
+        
+        if (scoreBoard.getPlayerWins() > scoreBoard.getComputerWins()) {
+            winner = player1Name;
+            soundManager.playSound("win");
+        } else {
+            winner = player2Name;
+            soundManager.playSound("lose");
+        }
+        
+        String message = String.format("%s wins the match!\n\nFinal Score:\n%s: %d\n%s: %d\nDraws: %d\n\nTotal rounds played: %d",
+            winner,
+            player1Name,
+            scoreBoard.getPlayerWins(),
+            player2Name,
+            scoreBoard.getComputerWins(),
+            scoreBoard.getDraws(),
+            (scoreBoard.getPlayerWins() + scoreBoard.getComputerWins() + scoreBoard.getDraws())
+        );
+        
+        JOptionPane.showMessageDialog(this, message, "Match Results", JOptionPane.INFORMATION_MESSAGE);
+        
+        // Reset for a new match
+        resetGame();
+    }
+}
